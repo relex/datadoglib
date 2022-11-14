@@ -23,6 +23,7 @@ var config struct {
 	failAuthChance    float64
 	slowReceiveChance float64
 	badResponseChance float64
+	randomNetworkLag  int
 }
 
 func main() {
@@ -44,6 +45,7 @@ func parseConfig() {
 	flag.Float64Var(&config.failAuthChance, "random_no_auth", 0, "chance to fail authentication, from 0.0 to 1.0")
 	flag.Float64Var(&config.slowReceiveChance, "random_slow_receive", 0, "chance to receive data slowly, from 0.0 to 1.0")
 	flag.Float64Var(&config.badResponseChance, "random_bad_response", 0, "chance to return a non-200 response status code, from 0.0 to 1.0")
+	flag.IntVar(&config.randomNetworkLag, "random_network_lag", 0, "maximum random network lag on receiving request and responding, msec")
 	flag.Parse()
 }
 
@@ -78,7 +80,16 @@ func randomFailMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
+		var networkLagMsec time.Duration
+		if config.randomNetworkLag > 0 {
+			networkLagMsec = time.Duration(rand.Intn(config.randomNetworkLag))
+		}
+
+		time.Sleep(networkLagMsec * time.Millisecond)
+
 		next.ServeHTTP(w, r)
+
+		time.Sleep(networkLagMsec * time.Millisecond)
 	})
 }
 
