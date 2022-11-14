@@ -21,7 +21,7 @@ const (
 var config struct {
 	serverPort        string
 	failAuthChance    float64
-	noReceiveChance   float64
+	slowReceiveChance float64
 	badResponseChance float64
 }
 
@@ -42,7 +42,7 @@ func main() {
 func parseConfig() {
 	flag.StringVar(&config.serverPort, "port", "8083", "local port to launch the server at")
 	flag.Float64Var(&config.failAuthChance, "random_no_auth", 0, "chance to fail authentication, from 0.0 to 1.0")
-	flag.Float64Var(&config.noReceiveChance, "random_no_receive", 0, "chance to stop receiving data, from 0.0 to 1.0")
+	flag.Float64Var(&config.slowReceiveChance, "random_slow_receive", 0, "chance to receive data slowly, from 0.0 to 1.0")
 	flag.Float64Var(&config.badResponseChance, "random_bad_response", 0, "chance to return a non-200 response status code, from 0.0 to 1.0")
 	flag.Parse()
 }
@@ -67,8 +67,8 @@ func randomFailMiddleware(next http.Handler) http.Handler {
 			w.WriteHeader(http.StatusForbidden)
 			return
 		}
-		if config.noReceiveChance > rand.Float64() {
-			log.Println("triggered a stop receiving chance, sleeping for 30 seconds")
+		if config.slowReceiveChance > rand.Float64() {
+			log.Println("triggered a slow receive chance, sleeping for 30 seconds")
 			time.Sleep(time.Second * 30)
 			return
 		}
