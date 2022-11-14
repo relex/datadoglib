@@ -6,6 +6,7 @@ import (
 	"log"
 	"math/rand"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -19,11 +20,12 @@ const (
 )
 
 var config struct {
-	serverPort        string
-	failAuthChance    float64
-	slowReceiveChance float64
-	badResponseChance float64
-	randomNetworkLag  int
+	serverPort         string
+	failAuthChance     float64
+	slowReceiveChance  float64
+	badResponseChance  float64
+	randomNetworkLag   int
+	disableJsonParsing bool
 }
 
 func main() {
@@ -46,6 +48,7 @@ func parseConfig() {
 	flag.Float64Var(&config.slowReceiveChance, "random_slow_receive", 0, "chance to receive data slowly, from 0.0 to 1.0")
 	flag.Float64Var(&config.badResponseChance, "random_bad_response", 0, "chance to return a non-200 response status code, from 0.0 to 1.0")
 	flag.IntVar(&config.randomNetworkLag, "random_network_lag", 0, "maximum random network lag on receiving request and responding, msec")
+	flag.BoolVar(&config.disableJsonParsing, "disable_json_parsing", false, "disable payload unmarshalling to increase processing speed, boolean")
 	flag.Parse()
 }
 
@@ -98,6 +101,15 @@ func handleLogs(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		log.Println(err)
+		return
+	}
+
+	if config.disableJsonParsing {
+		_, err = io.Copy(os.Stdout, reader)
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			log.Println(err)
+		}
 		return
 	}
 
