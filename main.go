@@ -80,16 +80,16 @@ func randomFailMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
-		var networkLagMsec time.Duration
+		var networkLag time.Duration
 		if config.randomNetworkLag > 0 {
-			networkLagMsec = time.Duration(rand.Intn(config.randomNetworkLag))
+			networkLag = time.Duration(rand.Intn(config.randomNetworkLag)) * time.Millisecond
 		}
 
-		time.Sleep(networkLagMsec * time.Millisecond)
+		time.Sleep(networkLag)
 
 		next.ServeHTTP(w, r)
 
-		time.Sleep(networkLagMsec * time.Millisecond)
+		time.Sleep(networkLag)
 	})
 }
 
