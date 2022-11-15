@@ -106,7 +106,9 @@ func handleLogs(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
 			log.Println(err)
+			return
 		}
+		w.WriteHeader(http.StatusOK)
 		return
 	}
 
