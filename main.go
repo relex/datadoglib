@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"io"
 	"log"
@@ -39,7 +40,12 @@ func main() {
 		WriteTimeout: serverTimeout,
 	}
 
-	panic(srv.ListenAndServe())
+	err := srv.ListenAndServe()
+	if err != nil && !errors.Is(err, http.ErrServerClosed) {
+		log.Fatal("error while serving http", err)
+	}
+
+	log.Println("exiting the application normally")
 }
 
 func parseConfig() {
