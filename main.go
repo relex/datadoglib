@@ -101,22 +101,30 @@ func randomFailMiddleware(next http.Handler) http.Handler {
 	})
 }
 
+const maxPayloadSize = 5 * 1024 * 1024
+
 func handleLogs(w http.ResponseWriter, r *http.Request) {
 	reader, err := gzip.NewReader(r.Body)
 	if err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
+		w.WriteHeader(http.StatusBadRequest)
 		log.Println(err)
 		return
 	}
 
 	if config.disableJsonParsing {
-		_, err = io.Copy(os.Stdout, reader)
+		written, err := io.Copy(os.Stdout, reader)
 		if err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
 			log.Println(err)
 			return
 		}
-		w.WriteHeader(http.StatusOK)
+		if written > maxPayloadSize {
+			w.WriteHeader(http.StatusRequestEntityTooLarge)
+			log.Printf("payload size %d exceeds the maximum allowed size of %d", written, maxPayloadSize)
+			return
+		}
+
+		w.WriteHeader(http.StatusAccepted)
 		return
 	}
 
@@ -127,15 +135,21 @@ func handleLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if len(dataBytes) > maxPayloadSize {
+		w.WriteHeader(http.StatusRequestEntityTooLarge)
+		log.Printf("payload size %d exceeds the maximum allowed size of %d", len(dataBytes), maxPayloadSize)
+		return
+	}
+
 	var requestData []map[string]string
 	err = json.Unmarshal(dataBytes, &requestData)
 	if err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
+		w.WriteHeader(http.StatusBadRequest)
 		log.Println(err, string(dataBytes))
 		return
 	}
 
 	log.Println(requestData)
 
-	w.WriteHeader(http.StatusOK)
+	w.WriteHeader(http.StatusAccepted)
 }
