@@ -52,13 +52,15 @@ func parseConfig() {
 	flag.Parse()
 }
 
-func getRouter() *chi.Mux {
+func getRouter() chi.Router {
 	mux := chi.NewMux()
 
 	mux.Use(middleware.StripSlashes)
 	mux.Use(randomFailMiddleware)
 
-	mux.Post("/", handleLogs)
+	mux.Route("/api/v2", func(r chi.Router) {
+		r.Post("/logs", handleLogs)
+	})
 
 	return mux
 }
