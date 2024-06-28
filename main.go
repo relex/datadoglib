@@ -1,19 +1,22 @@
 package main
 
 import (
+	"bytes"
 	"errors"
 	"flag"
+	"fmt"
 	"io"
-	"log"
 	"math/rand"
 	"net/http"
 	"os"
+	"sync/atomic"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/goccy/go-json"
 	"github.com/klauspost/compress/gzip"
+	"github.com/relex/gotils/logger"
 )
 
 const (
@@ -27,12 +30,13 @@ var config struct {
 	badResponseChance  float64
 	randomNetworkLag   int
 	disableJsonParsing bool
+	showTimestamp      bool
 }
 
 func main() {
 	parseConfig()
 
-	log.Println("starting the server at port " + config.serverPort)
+	logger.Info("starting the server at port " + config.serverPort)
 	srv := http.Server{
 		Addr:         ":" + config.serverPort,
 		Handler:      getRouter(),
@@ -42,10 +46,11 @@ func main() {
 
 	err := srv.ListenAndServe()
 	if err != nil && !errors.Is(err, http.ErrServerClosed) {
-		log.Fatal("error while serving http", err)
+		logger.Fatal("error while serving http: ", err)
 	}
 
-	log.Println("exiting the application normally")
+	logger.Info("exiting the application normally")
+	logger.Exit(0)
 }
 
 func parseConfig() {
@@ -55,7 +60,9 @@ func parseConfig() {
 	flag.Float64Var(&config.badResponseChance, "random_bad_response", 0, "chance to return a non-200 response status code, from 0.0 to 1.0")
 	flag.IntVar(&config.randomNetworkLag, "random_network_lag", 0, "maximum random network lag on receiving request and responding, msec")
 	flag.BoolVar(&config.disableJsonParsing, "disable_json_parsing", false, "disable payload unmarshalling to increase processing speed, boolean")
+	flag.BoolVar(&config.showTimestamp, "show_timestamp", false, "show timestamp in output before each request or log, boolean")
 	flag.Parse()
+	logger.Debug("Config: ", config)
 }
 
 func getRouter() chi.Router {
@@ -71,22 +78,30 @@ func getRouter() chi.Router {
 	return mux
 }
 
+var numOngoingRequests int64 = 0
+
 func randomFailMiddleware(next http.Handler) http.Handler {
 	rand.Seed(time.Now().UnixNano())
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		numReqs := atomic.AddInt64(&numOngoingRequests, 1)
+		defer atomic.AddInt64(&numOngoingRequests, -1)
+
+		reqLog := logger.WithField("remote", r.RemoteAddr)
+		reqLog.Infof("incoming request(%d): addr=%s, protocol=%s, headers=%v", numReqs, r.RemoteAddr, r.Proto, r.Header)
+
 		if config.failAuthChance > rand.Float64() {
-			log.Println("triggered a fail auth chance, returning status 403")
+			reqLog.Infof("triggered a fail auth chance, returning status 403")
 			w.WriteHeader(http.StatusForbidden)
 			return
 		}
 		if config.slowReceiveChance > rand.Float64() {
-			log.Println("triggered a slow receive chance, sleeping for 30 seconds")
+			reqLog.Infof("triggered a slow receive chance, sleeping for 30 seconds")
 			time.Sleep(time.Second * 30)
 			return
 		}
 		if config.badResponseChance > rand.Float64() {
-			log.Println("triggered a bad response chance, returning status 500")
+			reqLog.Infof("triggered a bad response chance, returning status 500")
 			w.WriteHeader(http.StatusInternalServerError)
 			return
 		}
@@ -94,7 +109,6 @@ func randomFailMiddleware(next http.Handler) http.Handler {
 		if config.randomNetworkLag > 0 {
 			networkLag := time.Duration(rand.Intn(config.randomNetworkLag)) * time.Millisecond
 			defer time.Sleep(networkLag)
-			time.Sleep(networkLag)
 		}
 
 		next.ServeHTTP(w, r)
@@ -104,25 +118,34 @@ func randomFailMiddleware(next http.Handler) http.Handler {
 const maxPayloadSize = 5 * 1024 * 1024
 
 func handleLogs(w http.ResponseWriter, r *http.Request) {
+	reqLog := logger.WithField("remote", r.RemoteAddr)
 	reader, err := gzip.NewReader(r.Body)
 	if err != nil {
 		w.WriteHeader(http.StatusBadRequest)
-		log.Println(err)
+		reqLog.Warn("failed to create gzip reader: ", err)
 		return
 	}
 
+	buf := bytes.NewBuffer(make([]byte, 0, maxPayloadSize))
 	if config.disableJsonParsing {
-		written, err := io.Copy(os.Stdout, reader)
+		if config.showTimestamp {
+			buf.WriteString(time.Now().Format(time.RFC3339Nano) + ": ")
+		}
+
+		written, err := io.Copy(buf, reader)
 		if err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
-			log.Println(err)
+			reqLog.Warn("failed to read gzip request: ", err)
 			return
 		}
 		if written > maxPayloadSize {
 			w.WriteHeader(http.StatusRequestEntityTooLarge)
-			log.Printf("payload size %d exceeds the maximum allowed size of %d", written, maxPayloadSize)
+			reqLog.Errorf("payload size %d exceeds the maximum allowed size of %d", written, maxPayloadSize)
 			return
 		}
+
+		_ = buf.WriteByte('\n')
+		_, _ = buf.WriteTo(os.Stdout)
 
 		w.WriteHeader(http.StatusAccepted)
 		return
@@ -131,25 +154,34 @@ func handleLogs(w http.ResponseWriter, r *http.Request) {
 	dataBytes, err := io.ReadAll(reader)
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
-		log.Println(err)
+		reqLog.Warn("failed to read gzip request: ", err)
 		return
 	}
 
 	if len(dataBytes) > maxPayloadSize {
 		w.WriteHeader(http.StatusRequestEntityTooLarge)
-		log.Printf("payload size %d exceeds the maximum allowed size of %d", len(dataBytes), maxPayloadSize)
+		reqLog.Errorf("payload size %d exceeds the maximum allowed size of %d", len(dataBytes), maxPayloadSize)
 		return
 	}
 
-	var requestData []map[string]string
+	prefix := ""
+	if config.showTimestamp {
+		prefix = time.Now().Format(time.RFC3339Nano) + ": "
+	}
+
+	var requestData []map[string]any
 	err = json.Unmarshal(dataBytes, &requestData)
 	if err != nil {
 		w.WriteHeader(http.StatusBadRequest)
-		log.Println(err, string(dataBytes))
+		reqLog.Errorf("failed to decode JSON request body: %s. Body: %s", err, string(dataBytes))
 		return
 	}
 
-	log.Println(requestData)
+	for _, log := range requestData {
+		_, _ = buf.WriteString(prefix)
+		_, _ = fmt.Fprintln(buf, log)
+		_, _ = buf.WriteTo(os.Stdout)
+	}
 
 	w.WriteHeader(http.StatusAccepted)
 }
